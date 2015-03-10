@@ -2,6 +2,7 @@
 
 LB_DOMAIN=lb.api.qcloud.com
 VM_DOMAIN=cvm.api.qcloud.com
+LB_TYPE=3 #only operate local network load balancers
 RESULT=
 
 #call qcloud http api
@@ -32,7 +33,6 @@ request_qcloud() {
   )
 
   RESULT=$(echo -en "$(curl --get "https://$domain$path" $curl_pairs 2>/dev/null)")
-  #RESULT=$(echo -en "$(curl -m 10 --get -v "https://$domain$path" $curl_pairs)")
   local code=$(echo $RESULT | jq -r '.code')
   if [ $code -ne 0 ]
     then
@@ -43,12 +43,11 @@ request_qcloud() {
 
 create_lb() {
   local lb_name=$1
-  local lb_type=$2
   unset params
   declare -A params
   params[Action]=CreateLoadBalancer
   params[loadBalancerName]=$lb_name
-  params[loadBalancerType]=$lb_type
+  params[loadBalancerType]=$LB_TYPE
   request_qcloud $LB_DOMAIN
 }
 
@@ -111,28 +110,31 @@ deregist_instance() {
 
 describe_lb() {
   local lb_name=$1
-  local lb_type=$2
   unset params
   declare -A params
   params[Action]=DescribeLoadBalancers
   params[loadBalancerName]=$lb_name
-  params[loadBalancerType]=$lb_type
+  params[loadBalancerType]=$LB_TYPE
 
   request_qcloud $LB_DOMAIN
 
   if [ $(echo $RESULT | jq '.totalCount') -eq 0 ]
     then
-      echo "load balancer $lb_name (type $lb_type) not found"
+      echo "load balancer $lb_name not found"
       exit 1
   fi
 }
 
+list_lb() {
+  echo $RESULT | jq -r '.loadBalancerSet[] | .loadBalancerName + "\t\t" + .loadBalancerVips[0] + "\t\t" + .createTime'
+}
+
 get_lb_id() {
-  echo $RESULT | jq -r '.loadBalancerSet[0] | .loadBalancerId'
+  echo $RESULT | jq -r ".loadBalancerSet[0] | .loadBalancerId"
 }
 
 get_lb_ip() {
-  echo $RESULT | jq -r '.loadBalancerSet[0] | .loadBalancerVips[0]'
+  echo $RESULT | jq -r ".loadBalancerSet[0] | .loadBalancerVips[0]"
 }
 
 describe_listeners() {
@@ -151,7 +153,7 @@ get_listener_ports() {
 
 get_listener_id() {
   local lb_port=$1
-  echo $RESULT | jq -r ".listenerSet[] | map (.loadBalancerPort  == $lb_port) | .listenerId"
+  echo $RESULT | jq -r ".listenerSet[] | select(.loadBalancerPort  == $lb_port) | .listenerId"
 }
 
 describe_backends() {
@@ -173,8 +175,14 @@ describe_instance() {
   unset params
   declare -A params
   params[Action]=DescribeInstances
-  params[searchWord]=$instance_name
 
+  if [ -z $instance_name ]
+    then
+      local ip=$(ifconfig eth0 | grep 'inet ' | awk '{print $2}' | awk -F":" '{print $2}')
+      params[lanIps.1]=$ip
+    else
+      params[searchWord]=$instance_name
+  fi
   request_qcloud $VM_DOMAIN
 
   if [ $(echo $RESULT | jq -r '.totalCount') -eq 0 ]
@@ -195,7 +203,7 @@ op=show
 lb_port=
 instance_name=
 
-TEMP=`getopt -o h --long conf:,create,delete,regist:,deregist:,listen:,unlisten: -n 'qlb' -- "$@"`
+TEMP=`getopt -o h --long conf:,create,delete,regist:,deregist:,listen:,unlisten:,regist-local,deregist-local -n 'qlb' -- "$@"`
 eval set -- "$TEMP"
 
 while true ; do
@@ -207,6 +215,8 @@ while true ; do
         --unlisten) op="unlisten"; lb_port=$2; shift 2;;
         --regist) op="regist"; instance_name=$2; shift 2;;
         --deregist) op="deregist"; instance_name=$2; shift 2;;
+        --regist-local) op="regist"; instance_name=; shift;;
+        --deregist-local) op="deregist"; instance_name=; shift;;
         -h) echo "see wiki"; shift;;
         --) shift; break;;
         *) echo "Internal error!" ; exit 1;;
@@ -218,55 +228,58 @@ source $conf_file
 shift $(($OPTIND - 1))
 lb_name=$1
 
-if [ -z $lb_name ]
+if [ -z $lb_name ] && [ $op != "show" ]
   then
     echo "need load balancer name"
     exit 1
 fi
 
-lb_type=3 #local network
 case $op in
   show)
-    describe_lb $lb_name $lb_type
+    describe_lb $lb_name
+
+    if [ -z $lb_name ]
+      then
+        list_lb
+        exit 0
+    fi
+
     lb_id=$(get_lb_id)
     lb_ip=$(get_lb_ip)
-    echo "ip: $lb_ip"
-
     describe_listeners $lb_id
-    echo "ports: $(get_listener_ports)"
-
+    ports=$(get_listener_ports)
     describe_backends $lb_id
-    echo "backends: $(get_backend_names)"
+    backends=$(get_backend_names)
+
+    echo -e "$lb_ip\t\t$ports\t\t$backends"
   ;;
   create) 
-    create_lb $lb_name $lb_type
+    create_lb $lb_name
   ;;
 
   delete)
-    describe_lb $lb_name $lb_type
+    describe_lb $lb_name
     lb_id=$(get_lb_id)
     delete_lb $lb_id
   ;;
 
   listen)
-    describe_lb $lb_name $lb_type
+    describe_lb $lb_name 
     lb_id=$(get_lb_id)
     protocol=2 #tcp
     create_listener $lb_id $lb_port $lb_port $protocol
   ;;
 
   unlisten)
-    describe_lb $lb_name $lb_type
+    describe_lb $lb_name 
     lb_id=$(get_lb_id)
-
     describe_listeners $lb_id
     listener_id=$(get_listener_id $lb_port)
-    
     delete_listener $lb_id $listener_id
   ;;
 
   regist)
-    describe_lb $lb_name $lb_type
+    describe_lb $lb_name 
     lb_id=$(get_lb_id)
 
     describe_instance $instance_name
@@ -276,7 +289,7 @@ case $op in
   ;;
 
   deregist)
-    describe_lb $lb_name $lb_type
+    describe_lb $lb_name 
     lb_id=$(get_lb_id)
 
     describe_instance $instance_name
@@ -284,4 +297,5 @@ case $op in
 
     deregist_instance $lb_id $instance_id
   ;;
+
 esac
