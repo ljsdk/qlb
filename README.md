@@ -1,11 +1,11 @@
-tool for operate qcloud load balancer
-通过shell命令操作腾讯云负载均衡，支持创建、绑定端口、注册后端等功能
+##tool for operate qcloud load balancer
+*通过shell命令操作腾讯云负载均衡，支持创建、绑定端口、注册后端等功能
 
-对原有http api做了一些简化：
-负载均衡后端的端口必须相等
-只支持内网无日租、tcp协议的负载均衡操作
+##对原有http api做了一些简化：
+*负载均衡后端的端口必须相等
+*只支持内网无日租、tcp协议的负载均衡操作
 
-install
+##install
 
 ```
 sudo apt-get install jq curl
@@ -15,7 +15,7 @@ sudo ./install
 sudo vi /etc/qlb.conf
 ```
 
-Usage
+##Usage
 ```
 qlb [OPTION] [NAME]
 --conf=FILE
