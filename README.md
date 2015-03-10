@@ -2,12 +2,13 @@ tool for operate qcloud load balancer
 
 install
 
+```
 sudo apt-get install jq
 git clone https://github.com/ljsdk/qlb.git
 cd qlb/
 sudo ./install 
 sudo vi /etc/qlb.conf
-
+```
 Usage
 
 qlb 
