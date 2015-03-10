@@ -20,10 +20,10 @@ sudo vi /etc/qlb.conf
 qlb [OPTION] [NAME]
 --conf=FILE
         use FILE as config file, default config file is /etc/qlb.conf
---create=NAME
-        create new load balancer with name NAME
---delete=NAME
-        delete load balancer with name NAME
+--create
+        create new load balancer
+--delete
+        delete load balancer
 --listen=PORT
         load balancer listen to PORT. (load balancer port and backend port are same)
 --unlisten=PORT
