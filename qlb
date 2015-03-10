@@ -20,7 +20,7 @@ request_qcloud() {
     for k in "${!params[@]}"
     do 
       echo "$k=${params[$k]}"
-    done | LANG=C sort | tr "\n" "&" | sed 's/&$//'
+    done | LC_ALL=C sort | tr "\n" "&" | sed 's/&$//'
   )
 
   params[Signature]=$(echo -n $method$domain$path?$sorted_pairs | openssl dgst -sha1 -hmac "$secret_key" -binary | base64)
