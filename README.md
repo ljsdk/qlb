@@ -2,8 +2,12 @@
 
 ##example
 ```
+#取消本机和负载均衡lb1之间的关联
 qlb --deregist-local lb1
-#restart service
+
+#重新部署或者重启服务
+
+#关联本机和负载均衡lb1
 qlb --regist-local lb1
 ```
 
