@@ -1,2 +1,2 @@
 cp ./qlb /usr/bin/qlb
-cp ./conf.example /etc/qlb.conf
+[ -f /etc/qlb.conf ] || cp ./conf.example /etc/qlb.conf
