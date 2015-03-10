@@ -1,9 +1,11 @@
 ##通过shell命令操作腾讯云负载均衡
-* 支持创建、绑定端口、注册后端等功能
 
-##对原有http api做了一些简化和限制：
-* 负载均衡前后端端口必须相等
-* 只支持内网无日租、tcp协议的负载均衡操作
+##example
+```
+qlb --deregist-local lb1
+#restart service
+qlb --regist-local lb1
+```
 
 ##install
 
