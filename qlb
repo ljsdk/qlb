@@ -1,0 +1,287 @@
+#!/bin/bash
+
+LB_DOMAIN=lb.api.qcloud.com
+VM_DOMAIN=cvm.api.qcloud.com
+RESULT=
+
+#call qcloud http api
+request_qcloud() {
+  local domain=$1
+  local method=GET
+  local path=/v2/index.php
+
+  params[Timestamp]=$(date +%s)
+  params[Nonce]=$RANDOM
+  params[Region]=$region
+  params[SecretId]=$secret_id
+
+  local sorted_pairs=$(
+    for k in "${!params[@]}"
+    do 
+      echo "$k=${params[$k]}"
+    done | LANG=C sort | tr "\n" "&" | sed 's/&$//'
+  )
+
+  params[Signature]=$(echo -n $method$domain$path?$sorted_pairs | openssl dgst -sha1 -hmac "$secret_key" -binary | base64)
+
+  local curl_pairs=$(
+    for k in "${!params[@]}"
+    do 
+      echo "--data-urlencode $k=${params["$k"]}"
+    done | tr "\n" " "
+  )
+
+  RESULT=$(echo -en "$(curl --get "https://$domain$path" $curl_pairs 2>/dev/null)")
+  #RESULT=$(echo -en "$(curl -m 10 --get -v "https://$domain$path" $curl_pairs)")
+  local code=$(echo $RESULT | jq -r '.code')
+  if [ $code -ne 0 ]
+    then
+      echo $RESULT | jq -r '.message'
+      exit 1;     
+  fi
+}
+
+create_lb() {
+  local lb_name=$1
+  local lb_type=$2
+  unset params
+  declare -A params
+  params[Action]=CreateLoadBalancer
+  params[loadBalancerName]=$lb_name
+  params[loadBalancerType]=$lb_type
+  request_qcloud $LB_DOMAIN
+}
+
+delete_lb() {
+  local lb_id=$1
+  unset params
+  declare -A params
+  params[Action]=DeleteLoadBalancers
+  params[loadBalancerIds.1]=$lb_id
+  request_qcloud $LB_DOMAIN
+}
+
+create_listener() {
+  local lb_id=$1
+  local lb_port=$2
+  local instance_port=$3
+  local protocol=$4
+  unset params
+  declare -A params
+  params[Action]=CreateLoadBalancerListeners
+  params[loadBalancerId]=$lb_id
+  params[listeners.1.loadBalancerPort]=$lb_port
+  params[listeners.1.instancePort]=$instance_port
+  params[listeners.1.protocol]=$protocol
+  request_qcloud $LB_DOMAIN
+}
+
+delete_listener() {
+  local lb_id=$1
+  local listener_id=$2
+  unset params
+  declare -A params
+  params[Action]=DeleteLoadBalancerListeners
+  params[loadBalancerId]=$lb_id
+  params[listenerIds.1]=$listener_id
+  request_qcloud $LB_DOMAIN
+}
+
+regist_instance() {
+  local lb_id=$1
+  local instance_id=$2
+  unset params
+  declare -A params
+  params[Action]=RegisterInstancesWithLoadBalancer
+  params[loadBalancerId]=$lb_id
+  params[backends.1.instanceId]=$instance_id
+  request_qcloud $LB_DOMAIN
+}
+
+deregist_instance() {
+  local lb_id=$1
+  local instance_id=$2
+  unset params
+  declare -A params
+  params[Action]=DeregisterInstancesFromLoadBalancer
+  params[loadBalancerId]=$lb_id
+  params[backends.1.instanceId]=$instance_id
+  request_qcloud $LB_DOMAIN
+}
+
+describe_lb() {
+  local lb_name=$1
+  local lb_type=$2
+  unset params
+  declare -A params
+  params[Action]=DescribeLoadBalancers
+  params[loadBalancerName]=$lb_name
+  params[loadBalancerType]=$lb_type
+
+  request_qcloud $LB_DOMAIN
+
+  if [ $(echo $RESULT | jq '.totalCount') -eq 0 ]
+    then
+      echo "load balancer $lb_name (type $lb_type) not found"
+      exit 1
+  fi
+}
+
+get_lb_id() {
+  echo $RESULT | jq -r '.loadBalancerSet[0] | .loadBalancerId'
+}
+
+get_lb_ip() {
+  echo $RESULT | jq -r '.loadBalancerSet[0] | .loadBalancerVips[0]'
+}
+
+describe_listeners() {
+  local lb_id=$1
+  unset params
+  declare -A params
+  params[Action]=DescribeLoadBalancerListeners
+  params[loadBalancerId]=$lb_id
+
+  request_qcloud $LB_DOMAIN
+}
+
+get_listener_ports() {
+  echo $RESULT | jq -c "[.listenerSet[] | .loadBalancerPort]"
+}
+
+get_listener_id() {
+  local lb_port=$1
+  echo $RESULT | jq -r ".listenerSet[] | map (.loadBalancerPort  == $lb_port) | .listenerId"
+}
+
+describe_backends() {
+  local lb_id=$1
+  unset params
+  declare -A params
+  params[Action]=DescribeLoadBalancerBackends
+  params[loadBalancerId]=$lb_id
+
+  request_qcloud $LB_DOMAIN
+}
+
+get_backend_names() {
+  echo $RESULT | jq -c '[.backendSet[] | .instanceName]'
+}
+
+describe_instance() {
+  local instance_name=$1
+  unset params
+  declare -A params
+  params[Action]=DescribeInstances
+  params[searchWord]=$instance_name
+
+  request_qcloud $VM_DOMAIN
+
+  if [ $(echo $RESULT | jq -r '.totalCount') -eq 0 ]
+    then
+      echo "instance $instance_name not found"
+      exit 1
+  fi
+}
+
+get_instance_id() {
+  echo $RESULT | jq -r '.instanceSet[0] | .instanceId'
+}
+
+#parse arguments
+
+conf_file=/etc/qlb.conf
+op=show
+lb_port=
+instance_name=
+
+TEMP=`getopt -o h --long conf:,create,delete,regist:,deregist:,listen:,unlisten: -n 'qlb' -- "$@"`
+eval set -- "$TEMP"
+
+while true ; do
+    case "$1" in
+        --conf) conf_file=$2; shift 2;;
+        --create) op="create"; shift;;
+        --delete) op="delete"; shift;;
+        --listen) op="listen"; lb_port=$2; shift 2;;
+        --unlisten) op="unlisten"; lb_port=$2; shift 2;;
+        --regist) op="regist"; instance_name=$2; shift 2;;
+        --deregist) op="deregist"; instance_name=$2; shift 2;;
+        -h) echo "see wiki"; shift;;
+        --) shift; break;;
+        *) echo "Internal error!" ; exit 1;;
+    esac
+done
+
+source $conf_file
+
+shift $(($OPTIND - 1))
+lb_name=$1
+
+if [ -z $lb_name ]
+  then
+    echo "need load balancer name"
+    exit 1
+fi
+
+lb_type=3 #local network
+case $op in
+  show)
+    describe_lb $lb_name $lb_type
+    lb_id=$(get_lb_id)
+    lb_ip=$(get_lb_ip)
+    echo "ip: $lb_ip"
+
+    describe_listeners $lb_id
+    echo "ports: $(get_listener_ports)"
+
+    describe_backends $lb_id
+    echo "backends: $(get_backend_names)"
+  ;;
+  create) 
+    create_lb $lb_name $lb_type
+  ;;
+
+  delete)
+    describe_lb $lb_name $lb_type
+    lb_id=$(get_lb_id)
+    delete_lb $lb_id
+  ;;
+
+  listen)
+    describe_lb $lb_name $lb_type
+    lb_id=$(get_lb_id)
+    protocol=2 #tcp
+    create_listener $lb_id $lb_port $lb_port $protocol
+  ;;
+
+  unlisten)
+    describe_lb $lb_name $lb_type
+    lb_id=$(get_lb_id)
+
+    describe_listeners $lb_id
+    listener_id=$(get_listener_id $lb_port)
+    
+    delete_listener $lb_id $listener_id
+  ;;
+
+  regist)
+    describe_lb $lb_name $lb_type
+    lb_id=$(get_lb_id)
+
+    describe_instance $instance_name
+    instance_id=$(get_instance_id)
+
+    regist_instance $lb_id $instance_id
+  ;;
+
+  deregist)
+    describe_lb $lb_name $lb_type
+    lb_id=$(get_lb_id)
+
+    describe_instance $instance_name
+    instance_id=$(get_instance_id)
+
+    deregist_instance $lb_id $instance_id
+  ;;
+esac
